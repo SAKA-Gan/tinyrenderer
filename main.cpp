@@ -1,82 +1,133 @@
-#include <limits>
+﻿#include <limits>
 #include "model.h"
 #include "our_gl.h"
 
-constexpr int width  = 800; // output image size
-constexpr int height = 800;
-constexpr vec3 light_dir{1,1,1}; // light source
-constexpr vec3       eye{1,1,3}; // camera position
-constexpr vec3    center{0,0,0}; // camera direction
-constexpr vec3        up{0,1,0}; // camera up vector
 
-extern mat<4,4> ModelView; // "OpenGL" state matrices
-extern mat<4,4> Projection;
+const int width = 800;
+const int height = 800;
+Model* model = NULL;
+const TGAColor red = { 0, 0, 255, 255 };
+const TGAColor white = { 255,255, 255, 255 };
+const TGAColor green = { 0,255, 0, 255 };
 
-struct Shader : IShader {
-    const Model &model;
-    vec3 uniform_l;       // light direction in view coordinates
-    mat<2,3> varying_uv;  // triangle uv coordinates, written by the vertex shader, read by the fragment shader
-    mat<3,3> varying_nrm; // normal per vertex to be interpolated by FS
-    mat<3,3> view_tri;    // triangle in view coordinates
-
-    Shader(const Model &m) : model(m) {
-        uniform_l = proj<3>((ModelView*embed<4>(light_dir, 0.))).normalized(); // transform the light vector to view coordinates
+void Drawline(int x1, int y1, int x2, int y2, TGAImage& image, TGAColor color)
+{
+    bool steep = false;
+    if (std::abs(x1 - x2) < std::abs(y1 - y2))
+    {
+        std::swap(x1, y1);
+        std::swap(x2, y2);
+        steep = true;
     }
-
-    virtual void vertex(const int iface, const int nthvert, vec4& gl_Position) {
-        varying_uv.set_col(nthvert, model.uv(iface, nthvert));
-        varying_nrm.set_col(nthvert, proj<3>((ModelView).invert_transpose()*embed<4>(model.normal(iface, nthvert), 0.)));
-        gl_Position= ModelView*embed<4>(model.vert(iface, nthvert));
-        view_tri.set_col(nthvert, proj<3>(gl_Position));
-        gl_Position = Projection*gl_Position;
+    if (x1 > x2)
+    {
+        std::swap(x1, x2);
+        std::swap(y1, y2);
     }
-
-    virtual bool fragment(const vec3 bar, TGAColor &gl_FragColor) {
-        vec3 bn = (varying_nrm*bar).normalized(); // per-vertex normal interpolation
-        vec2 uv = varying_uv*bar; // tex coord interpolation
-
-        // for the math refer to the tangent space normal mapping lecture
-        // https://github.com/ssloy/tinyrenderer/wiki/Lesson-6bis-tangent-space-normal-mapping
-        mat<3,3> AI = mat<3,3>{ {view_tri.col(1) - view_tri.col(0), view_tri.col(2) - view_tri.col(0), bn} }.invert();
-        vec3 i = AI * vec3{varying_uv[0][1] - varying_uv[0][0], varying_uv[0][2] - varying_uv[0][0], 0};
-        vec3 j = AI * vec3{varying_uv[1][1] - varying_uv[1][0], varying_uv[1][2] - varying_uv[1][0], 0};
-        mat<3,3> B = mat<3,3>{ {i.normalized(), j.normalized(), bn} }.transpose();
-
-        vec3 n = (B * model.normal(uv)).normalized(); // transform the normal from the texture to the tangent space
-        double diff = std::max(0., n*uniform_l); // diffuse light intensity
-        vec3 r = (n*(n*uniform_l)*2 - uniform_l).normalized(); // reflected light direction, specular mapping is described here: https://github.com/ssloy/tinyrenderer/wiki/Lesson-6-Shaders-for-the-software-renderer
-        double spec = std::pow(std::max(-r.z, 0.), 5+sample2D(model.specular(), uv)[0]); // specular intensity, note that the camera lies on the z-axis (in view), therefore simple -r.z
-
-        TGAColor c = sample2D(model.diffuse(), uv);
-        for (int i : {0,1,2})
-            gl_FragColor[i] = std::min<int>(10 + c[i]*(diff + spec), 255); // (a bit of ambient light, diff + spec), clamp the result
-
-        return false; // the pixel is not discarded
-    }
-};
-
-int main(int argc, char** argv) {
-    if (2>argc) {
-        std::cerr << "Usage: " << argv[0] << " obj/model.obj" << std::endl;
-        return 1;
-    }
-    TGAImage framebuffer(width, height, TGAImage::RGB); // the output image
-    lookat(eye, center, up);                            // build the ModelView matrix
-    viewport(width/8, height/8, width*3/4, height*3/4); // build the Viewport matrix
-    projection((eye-center).norm());                    // build the Projection matrix
-    std::vector<double> zbuffer(width*height, std::numeric_limits<double>::max());
-
-    for (int m=1; m<argc; m++) { // iterate through all input objects
-        Model model(argv[m]);
-        Shader shader(model);
-        for (int i=0; i<model.nfaces(); i++) { // for every triangle
-            vec4 clip_vert[3]; // triangle coordinates (clip coordinates), written by VS, read by FS
-            for (int j : {0,1,2})
-                shader.vertex(i, j, clip_vert[j]); // call the vertex shader for each triangle vertex
-            triangle(clip_vert, shader, framebuffer, zbuffer); // actual rasterization routine call
+    int dx = x2 - x1;
+    int dy = y2 - y1;
+    float error = 0;
+    float deError = std::abs(dy) * 2;
+    for (float i = x1; i <= x2; i++)
+    {
+        float t = (i - x1) / (float)(x2 - x1);
+        float y = t * y2 + y1 * (1 - t);
+        if (steep)
+        {
+            image.set(y, i, color);
+        }
+        else
+        {
+            image.set(i, y, color);
+        }
+        error += deError;
+        if (error > .5)
+        {
+            y += (y2 > y1 ? 1 : -1);
+            error -= dx * 2;
         }
     }
-    framebuffer.write_tga_file("framebuffer.tga");
+}
+
+void DrawTriangle(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage& image, TGAColor color)
+{
+    if (t0.y == t1.y && t0.y == t2.y) return; // I dont care about degenerate triangles 
+    // sort the vertices, t0, t1, t2 lower−to−upper (bubblesort yay!) 
+    if (t0.y > t1.y) std::swap(t0, t1);
+    if (t0.y > t2.y) std::swap(t0, t2);
+    if (t1.y > t2.y) std::swap(t1, t2);
+    int total_height = t2.y - t0.y;
+    for (int i = t0.y; i <= t1.y; i++)
+    {
+        int segmentHeight = (t1.y - t0.y);
+        float alpha = (float)(i - t0.y) / total_height;
+        float beta = (float)(i - t0.y) / segmentHeight;
+        Vec2i A = t0 + (t2 - t0) * alpha;
+        Vec2i B = t0 + (t1 - t0) * beta;
+        if (A.x > B.x)std::swap(A, B);
+        for (int j = A.x; j <= B.x; j++)
+        {
+            image.set(j, i, color);
+        }
+    }
+    for (int i = t1.y; i <= t2.y; i++)
+    {
+        int segmentHeight = (t2.y - t1.y);
+        float alpha = (float)(i - t0.y) / total_height;
+        float beta = (float)(i - t1.y) / segmentHeight;
+        Vec2i A = t0 + (t2 - t0) * alpha;
+        Vec2i B = t1 + (t2 - t1) * beta;
+        if (A.x > B.x)std::swap(A, B);
+        for (int j = A.x; j <= B.x; j++)
+        {
+            image.set(j, i, color);
+        }
+    }
+}
+
+void DrawModel(int argc, char** argv)
+{
+    if (argc == 2)
+    {
+        model = new Model(argv[1]);
+    }
+    else
+    {
+        model = new Model("C:/Project/tinyrenderer/obj/african_head/african_head.obj");
+    }
+    TGAImage image(width, height, TGAImage::RGB);
+    for (int i = 0; i < model->nfaces(); i++)
+    {
+        std::vector<int> face = model->face(i);
+        for (int j = 0; j < 3; j++)
+        {
+            Vec3f v0 = model->vert(face[j]);
+            Vec3f v1 = model->vert(face[(j + 1) % 3]);
+            int x0 = (v0.x + 1.) * width / 2.;
+            int y0 = (v0.y + 1.) * height / 2.;
+            int x1 = (v1.x + 1.) * width / 2.;
+            int y1 = (v1.y + 1.) * height / 2.;
+            Drawline(x0, y0, x1, y1, image, white);
+        }
+    }
+    image.write_tga_file("output.tga");
+    delete model;
+}
+
+int main(int argc, char** argv) {
+
+    TGAImage image(width, height, TGAImage::RGB);
+    Vec2i t0[3] = { Vec2i(10, 70),   Vec2i(50, 160),  Vec2i(70, 80) };
+    Vec2i t1[3] = { Vec2i(180, 50),  Vec2i(150, 1),   Vec2i(70, 180) };
+    Vec2i t2[3] = { Vec2i(180, 150), Vec2i(120, 160), Vec2i(130, 180) };
+    DrawTriangle(t0[0], t0[1], t0[2], image, red);
+    DrawTriangle(t1[0], t1[1], t1[2], image, white);
+    DrawTriangle(t2[0], t2[1], t2[2], image, green);
+    image.write_tga_file("output.tga");
     return 0;
 }
+
+
+
+
 
