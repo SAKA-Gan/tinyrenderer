@@ -7,8 +7,9 @@
   },
   "ExpandedNodes": [
     "",
+    "\\obj",
     "\\out"
   ],
-  "SelectedNode": "\\CMakeLists.txt",
+  "SelectedNode": "\\main.cpp",
   "PreviewInSolutionExplorer": false
 }

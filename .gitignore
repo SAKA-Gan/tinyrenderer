@@ -1,2 +1,7 @@
 build/
 framebuffer.tga
+*.vsidx
+.vs/tinyrenderer/v17/Browse.VC.db
+.vs/tinyrenderer/v17/Browse.VC.db-shm
+.vs/tinyrenderer/v17/Browse.VC.db-wal
+.vs/tinyrenderer/v17/Browse.VC.opendb
